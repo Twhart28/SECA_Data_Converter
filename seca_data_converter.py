@@ -6,11 +6,13 @@ reports and a destination folder.  It then extracts the patient metadata and
 measurement values defined in the project requirements and stores them in an
 Excel workbook (one row per PDF).
 
-Usage:
+Usage::
+
     python seca_data_converter.py
 
 Dependencies:
     - pdfplumber
+    - pytesseract (requires the Tesseract OCR binary)
     - pandas (which also requires openpyxl for Excel output)
     - tkinter (bundled with most Python distributions)
 """
@@ -25,6 +27,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import pdfplumber
+import pytesseract
 from tkinter import Tk, messagebox
 from tkinter import filedialog
 
@@ -66,7 +69,7 @@ MEASUREMENT_SPECS: List[MeasurementSpec] = [
     MeasurementSpec("Visceral Adipose Tissue", ["Visceral Adipose Tissue (L)"]),
     MeasurementSpec("Body Mass Index", ["Body Mass Index (kg/m^2)"]),
     MeasurementSpec("Height", ["Height (m)"]),
-    MeasurementSpec("Weight", ["Weight (kg)"]),
+    MeasurementSpec("Weight (kg)", ["Weight (kg)"]),
     MeasurementSpec("Total Body Water", ["Total Body Water (L)", "Total Body Water (%)"]),
     MeasurementSpec(
         "Extracellular Water",
@@ -94,6 +97,36 @@ def collapse_whitespace(text: str) -> str:
     """Return *text* with all whitespace collapsed to single spaces."""
 
     return " ".join(text.split())
+
+
+def extract_page_text(page: "pdfplumber.page.Page", include_ocr: bool = True) -> str:
+    """Return textual content for a page, optionally augmented with OCR."""
+
+    parts: List[str] = []
+    text = page.extract_text() or ""
+    if text.strip():
+        parts.append(text)
+
+    if include_ocr:
+        ocr_text = ""
+        try:
+            pil_image = page.to_image(resolution=300).original
+            ocr_text = pytesseract.image_to_string(pil_image)
+        except Exception:
+            # OCR is best-effort; fall back to whatever text layer we have.
+            ocr_text = ""
+        if ocr_text.strip():
+            parts.append(ocr_text)
+
+    return "\n".join(parts)
+
+
+def extract_pdf_text(pdf_path: Path) -> str:
+    """Extract all textual content from *pdf_path* using text and OCR."""
+
+    with pdfplumber.open(pdf_path) as pdf:
+        page_texts = [extract_page_text(page) for page in pdf.pages]
+    return "\n".join(filter(None, page_texts))
 
 
 def extract_numbers_near_label(text: str, label: str, count: int) -> List[float]:
@@ -125,6 +158,10 @@ def parse_patient_metadata(text: str) -> Dict[str, Optional[str]]:
     if sex_match:
         metadata["Sex"] = sex_match.group(1).title()
 
+    age_fallback = re.search(r"\b(\d{1,3})\s+(Male|Female)\b", text, re.IGNORECASE)
+    if metadata["Age"] is None and age_fallback:
+        metadata["Age"] = age_fallback.group(1)
+
     date_match = re.search(r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})", text)
     if date_match:
         metadata["Collection Date"] = date_match.group(1)
@@ -152,8 +189,7 @@ def parse_measurements(text: str) -> Dict[str, Optional[float]]:
 
 
 def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
-    with pdfplumber.open(pdf_path) as pdf:
-        full_text = "\n".join(filter(None, (page.extract_text() for page in pdf.pages)))
+    full_text = extract_pdf_text(pdf_path)
     normalized_text = collapse_whitespace(full_text)
 
     row: Dict[str, Optional[float]] = {}
