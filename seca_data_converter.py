@@ -46,7 +46,9 @@ class MeasurementSpec:
 
 PATIENT_FIELDS = {
     "Patient ID": re.compile(r"ID[:\s]+([A-Za-z0-9-]+)", re.IGNORECASE),
-    "Age": re.compile(r"Age[:\s]+(\d+)", re.IGNORECASE),
+    # Use a word boundary to avoid matching the "age" portion inside other words
+    # such as "Average", which previously resulted in incorrect ages (e.g. "1").
+    "Age": re.compile(r"\bAge[:\s]+(\d+)", re.IGNORECASE),
 }
 
 
@@ -86,6 +88,12 @@ MEASUREMENT_SPECS: List[MeasurementSpec] = [
 def normalize_number(token: str) -> float:
     token = token.replace(",", ".")
     return float(token)
+
+
+def collapse_whitespace(text: str) -> str:
+    """Return *text* with all whitespace collapsed to single spaces."""
+
+    return " ".join(text.split())
 
 
 def extract_numbers_near_label(text: str, label: str, count: int) -> List[float]:
@@ -146,10 +154,11 @@ def parse_measurements(text: str) -> Dict[str, Optional[float]]:
 def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
     with pdfplumber.open(pdf_path) as pdf:
         full_text = "\n".join(filter(None, (page.extract_text() for page in pdf.pages)))
+    normalized_text = collapse_whitespace(full_text)
 
     row: Dict[str, Optional[float]] = {}
-    row.update(parse_patient_metadata(full_text))
-    row.update(parse_measurements(full_text))
+    row.update(parse_patient_metadata(normalized_text))
+    row.update(parse_measurements(normalized_text))
     return row
 
 
