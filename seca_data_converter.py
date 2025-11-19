@@ -37,58 +37,12 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 # Regex that captures floats/integers including optional comma decimal marks.
 NUMBER_PATTERN = re.compile(r"-?\d+(?:[.,]\d+)?")
 
-
-@dataclass
-class MeasurementSpec:
-    """Defines how to capture measurements for a label."""
-
-    label: str
-    field_names: List[str]
-
-    def expected_count(self) -> int:
-        return len(self.field_names)
-
-
 PATIENT_FIELDS = {
     "Patient ID": re.compile(r"ID[:\s]+([A-Za-z0-9-]+)", re.IGNORECASE),
     # Use a word boundary to avoid matching the "age" portion inside other words
     # such as "Average", which previously resulted in incorrect ages (e.g. "1").
     "Age": re.compile(r"\bAge[:\s]+(\d+)", re.IGNORECASE),
 }
-
-
-MEASUREMENT_SPECS: List[MeasurementSpec] = [
-    MeasurementSpec("Fat Mass", ["Fat Mass (kg)", "Fat Mass (%)"]),
-    MeasurementSpec("Fat Mass Index", ["Fat Mass Index (kg/m^2)"]),
-    MeasurementSpec("Fat-Free Mass", ["Fat-Free Mass (kg)", "Fat-Free Mass (%)"]),
-    MeasurementSpec("Fat-Free Mass Index", ["Fat-Free Mass Index (kg/m^2)"]),
-    MeasurementSpec("Skeletal Muscle Mass", ["Skeletal Muscle Mass (kg)"]),
-    MeasurementSpec("right arm", ["Right Arm SMM (kg)"]),
-    MeasurementSpec("left arm", ["Left Arm SMM (kg)"]),
-    MeasurementSpec("right leg", ["Right Leg SMM (kg)"]),
-    MeasurementSpec("left leg", ["Left Leg SMM (kg)"]),
-    MeasurementSpec("torso", ["Torso SMM (kg)"]),
-    MeasurementSpec("Visceral Adipose Tissue", ["Visceral Adipose Tissue (L)"]),
-    MeasurementSpec("Body Mass Index", ["Body Mass Index (kg/m^2)"]),
-    MeasurementSpec("Height", ["Height (m)"]),
-    MeasurementSpec("Weight (kg)", ["Weight (kg)"]),
-    MeasurementSpec("Total Body Water", ["Total Body Water (L)", "Total Body Water (%)"]),
-    MeasurementSpec(
-        "Extracellular Water",
-        ["Extraceullar Water (L)", "Extracellular Water (%)"],
-    ),
-    MeasurementSpec("ECW/TBW", ["ECW/TBW (%)"]),
-    MeasurementSpec(
-        "Resting Energy Expenditure",
-        ["Resting Energy Expenditure (kcal/day)"],
-    ),
-    MeasurementSpec("Energy Consumption", ["Energy Consumption (kcal/day)"]),
-    MeasurementSpec("Phase Angle", ["Phase Angle (°)"]),
-    MeasurementSpec("Resistance", ["Resistance (Ω)"]),
-    MeasurementSpec("Reactance", ["Reactance (Ω)"]),
-    MeasurementSpec("Physical Activity Level", ["Physical Activity Level"]),
-]
-
 
 def normalize_number(token: str) -> float:
     token = token.replace(",", ".")
@@ -142,17 +96,6 @@ def extract_pdf_text(pdf_path: Path) -> str:
             parts.append(ocr_text)
 
     return "\n".join(parts)
-
-def extract_numbers_near_label(text: str, label: str, count: int) -> List[float]:
-    """Return up to *count* numbers that appear shortly after *label*."""
-
-    text_lower = text.lower()
-    idx = text_lower.find(label.lower())
-    if idx == -1:
-        return []
-    snippet = text[idx : idx + 200]
-    return [normalize_number(match) for match in NUMBER_PATTERN.findall(snippet)[:count]]
-
 
 def parse_patient_metadata(text: str) -> Dict[str, Optional[str]]:
     metadata: Dict[str, Optional[str]] = {
