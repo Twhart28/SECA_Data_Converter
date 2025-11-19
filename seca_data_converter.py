@@ -135,27 +135,6 @@ def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float
     Parse SECA measurement values from OCR text by assuming a fixed order
     of numeric values after the '10/7/2025' style date line.
     """
-    # Find the first date like 10/7/2025 or 7/10/2025
-    date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", full_text)
-    if not date_match:
-        return {}
-
-    start = date_match.start()
-
-    # Try to cut off before the footer "Page 1"
-    page_match = re.search(r"Page\s+\d+", full_text)
-    if page_match:
-        region = full_text[start:page_match.start()]
-    else:
-        region = full_text[start:]
-
-    # Extract all numbers in that region
-    nums = re.findall(r"\d+(?:\.\d+)?", region)
-    # First three numbers are the date pieces (month, day, year)
-    if len(nums) <= 3:
-        return {}
-
-    values = [float(n) for n in nums[3:]]  # skip the date
 
     field_defs: List[tuple[str, int]] = [
         ("Fat Mass (kg)", 1),
@@ -188,10 +167,33 @@ def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float
         ("Physical Activity Level", 1),
     ]
 
-    total_needed = sum(count for _, count in field_defs)
     measurements: Dict[str, Optional[float]] = {
         name: None for name, _ in field_defs
     }
+
+    # Find the first date like 10/7/2025 or 7/10/2025
+    date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", full_text)
+    if not date_match:
+        return measurements
+
+    start = date_match.start()
+
+    # Try to cut off before the footer "Page 1"
+    page_match = re.search(r"Page\s+\d+", full_text)
+    if page_match:
+        region = full_text[start:page_match.start()]
+    else:
+        region = full_text[start:]
+
+    # Extract all numbers in that region
+    nums = re.findall(r"\d+(?:\.\d+)?", region)
+    # First three numbers are the date pieces (month, day, year)
+    if len(nums) <= 3:
+        return measurements
+
+    values = [float(n) for n in nums[3:]]  # skip the date
+
+    total_needed = sum(count for _, count in field_defs)
 
     if len(values) < total_needed:
         # Not enough numbers; bail out gracefully
