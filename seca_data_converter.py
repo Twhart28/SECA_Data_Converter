@@ -19,8 +19,8 @@ Dependencies:
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -65,6 +65,53 @@ PATIENT_FIELDS = {
     # such as "Average", which previously resulted in incorrect ages (e.g. "1").
     "Age": re.compile(r"\bAge[:\s]+(\d+)", re.IGNORECASE),
 }
+
+PATIENT_METADATA_FIELDS = [
+    "Patient ID",
+    "Sex",
+    "Age",
+    "Collection Date",
+    "Collection Time",
+]
+
+MEASUREMENT_FIELD_NAMES: List[str] = [
+    "Fat Mass (kg)",
+    "Fat Mass (%)",
+    "Fat Mass Index (kg/m^2)",
+    "Fat-Free Mass (kg)",
+    "Fat-Free Mass (%)",
+    "Fat-Free Mass Index (kg/m^2)",
+    "Skeletal Muscle Mass (kg)",
+    "Right Arm (kg)",
+    "Left Arm (kg)",
+    "Right Leg (kg)",
+    "Left Leg (kg)",
+    "Torso (kg)",
+    "Visceral Adipose Tissue",
+    "Body Mass Index (kg/m^2)",
+    "Height (m)",
+    "Weight (kg)",
+    "Total Body Water (L)",
+    "Total Body Water (%)",
+    "Extracellular Water (L)",
+    "Extracellular Water (%)",
+    "ECW/TBW (%)",
+    "Resting Energy Expenditure (kcal/day)",
+    "Energy Consumption (kcal/day)",
+    "Phase Angle (deg)",
+    "Phase Angle Percentile",
+    "Resistance (Ohm)",
+    "Reactance (Ohm)",
+    "Physical Activity Level",
+]
+
+OUTPUT_FIELD_ORDER = [
+    "Source File",
+    *PATIENT_METADATA_FIELDS,
+    "Data Quality",
+    "Data Quality Fails",
+    *MEASUREMENT_FIELD_NAMES,
+]
 
 def normalize_number(token: str) -> float:
     token = token.replace(",", ".")
@@ -173,51 +220,165 @@ def parse_measurements_from_seca_ocr(ocr_text: str) -> Dict[str, Optional[float]
     nums = re.findall(r"\d+(?:\.\d+)?", ocr_text)
     values = [float(n) for n in nums]
 
-    # List of fields, in exact order they appear in the cropped OCR block
-    field_defs: List[str] = [
-        "Fat Mass (kg)",
-        "Fat Mass (%)",
-        "Fat Mass Index (kg/m^2)",
-        "Fat-Free Mass (kg)",
-        "Fat-Free Mass (%)",
-        "Fat-Free Mass Index (kg/m^2)",
-        "Skeletal Muscle Mass (kg)",
-        "Right Arm (kg)",
-        "Left Arm (kg)",
-        "Right Leg (kg)",
-        "Left Leg (kg)",
-        "Torso (kg)",
-        "Visceral Adipose Tissue",
-        "Body Mass Index (kg/m^2)",
-        "Height (m)",
-        "Weight (kg)",
-        "Total Body Water (L)",
-        "Total Body Water (%)",
-        "Extracellular Water (L)",
-        "Extracellular Water (%)",
-        "ECW/TBW (%)",
-        "Resting Energy Expenditure (kcal/day)",
-        "Energy Consumption (kcal/day)",
-        "Phase Angle (deg)",
-        "Phase Angle Percentile",
-        "Resistance (Ohm)",
-        "Reactance (Ohm)",
-        "Physical Activity Level",
-    ]
-
-    measurements = {name: None for name in field_defs}
+    measurements = {name: None for name in MEASUREMENT_FIELD_NAMES}
 
     # Fill what we can
-    for i, name in enumerate(field_defs):
+    for i, name in enumerate(MEASUREMENT_FIELD_NAMES):
         if i < len(values):
             measurements[name] = values[i]
 
     return measurements
 
+def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optional[str]]:
+    def numbers_present(fields: List[str]) -> bool:
+        return all(values.get(field) is not None for field in fields)
+
+    def almost_equal(calculated: float, expected: float, tolerance: float) -> bool:
+        return abs(calculated - expected) <= tolerance
+
+    failures: List[str] = []
+
+    if numbers_present(["Fat Mass (kg)", "Fat-Free Mass (kg)", "Weight (kg)"]):
+        fm = values["Fat Mass (kg)"]
+        ffm = values["Fat-Free Mass (kg)"]
+        weight = values["Weight (kg)"]
+        if not almost_equal((fm or 0) + (ffm or 0), weight or 0, 0.01):
+            failures.append("1")
+    else:
+        failures.append("1")
+
+    if numbers_present(["Fat Mass (%)", "Fat-Free Mass (%)"]):
+        fm_pct = values["Fat Mass (%)"]
+        ffm_pct = values["Fat-Free Mass (%)"]
+        if not almost_equal((fm_pct or 0) + (ffm_pct or 0), 100, 0.01):
+            failures.append("2")
+    else:
+        failures.append("2")
+
+    if numbers_present([
+        "Fat Mass Index (kg/m^2)",
+        "Fat-Free Mass Index (kg/m^2)",
+        "Body Mass Index (kg/m^2)",
+    ]):
+        fmi = values["Fat Mass Index (kg/m^2)"]
+        ffmi = values["Fat-Free Mass Index (kg/m^2)"]
+        bmi = values["Body Mass Index (kg/m^2)"]
+        if not almost_equal((fmi or 0) + (ffmi or 0), bmi or 0, 0.01):
+            failures.append("3")
+    else:
+        failures.append("3")
+
+    if numbers_present([
+        "Right Arm (kg)",
+        "Left Arm (kg)",
+        "Right Leg (kg)",
+        "Left Leg (kg)",
+        "Torso (kg)",
+        "Skeletal Muscle Mass (kg)",
+    ]):
+        sum_limbs = sum(
+            values.get(field, 0) or 0
+            for field in [
+                "Right Arm (kg)",
+                "Left Arm (kg)",
+                "Right Leg (kg)",
+                "Left Leg (kg)",
+                "Torso (kg)",
+            ]
+        )
+        if not almost_equal(sum_limbs, values["Skeletal Muscle Mass (kg)"] or 0, 0.01):
+            failures.append("4")
+    else:
+        failures.append("4")
+
+    if numbers_present(["Weight (kg)", "Height (m)", "Body Mass Index (kg/m^2)"]):
+        weight = values["Weight (kg)"]
+        height = values["Height (m)"]
+        bmi = values["Body Mass Index (kg/m^2)"]
+        if height in (0, None):
+            failures.append("5")
+        elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.01):
+            failures.append("5")
+    else:
+        failures.append("5")
+
+    if numbers_present([
+        "Extracellular Water (L)",
+        "Total Body Water (L)",
+        "ECW/TBW (%)",
+    ]):
+        ecw = values["Extracellular Water (L)"]
+        tbw = values["Total Body Water (L)"]
+        ratio = values["ECW/TBW (%)"]
+        if tbw in (0, None):
+            failures.append("6")
+        elif not almost_equal(((ecw or 0) / (tbw or 1)) * 100, ratio or 0, 0.01):
+            failures.append("6")
+    else:
+        failures.append("6")
+
+    if numbers_present([
+        "Extracellular Water (%)",
+        "Total Body Water (%)",
+        "ECW/TBW (%)",
+    ]):
+        ecw_pct = values["Extracellular Water (%)"]
+        tbw_pct = values["Total Body Water (%)"]
+        ratio = values["ECW/TBW (%)"]
+        if tbw_pct in (0, None):
+            failures.append("7")
+        elif not almost_equal(((ecw_pct or 0) / (tbw_pct or 1)) * 100, ratio or 0, 0.01):
+            failures.append("7")
+    else:
+        failures.append("7")
+
+    if numbers_present([
+        "Resting Energy Expenditure (kcal/day)",
+        "Physical Activity Level",
+        "Energy Consumption (kcal/day)",
+    ]):
+        ree = values["Resting Energy Expenditure (kcal/day)"]
+        pal = values["Physical Activity Level"]
+        energy = values["Energy Consumption (kcal/day)"]
+        if not almost_equal((ree or 0) * (pal or 0), energy or 0, 0.01):
+            failures.append("8")
+    else:
+        failures.append("8")
+
+    if numbers_present(["Reactance (Ohm)", "Resistance (Ohm)", "Phase Angle (deg)"]):
+        reactance = values["Reactance (Ohm)"]
+        resistance = values["Resistance (Ohm)"]
+        phase_angle = values["Phase Angle (deg)"]
+        if resistance in (0, None):
+            failures.append("9")
+        else:
+            calculated = math.atan((reactance or 0) / (resistance or 1)) * 180 / math.pi
+            if not almost_equal(calculated, phase_angle or 0, 0.1):
+                failures.append("9")
+    else:
+        failures.append("9")
+
+    percentile = values.get("Phase Angle Percentile")
+    if percentile is None or percentile < 0 or percentile > 100:
+        failures.append("10")
+
+    return {
+        "Data Quality": "Pass" if not failures else "Fail",
+        "Data Quality Fails": ",".join(failures) if failures else "",
+    }
+
+
 def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
+
+    row: Dict[str, Optional[float]] = {field: None for field in OUTPUT_FIELD_ORDER}
+    row["Source File"] = pdf_path.name
 
     # --- 1. HEADER TEXT (for Patient ID, Sex, Age, Date, Time) ---
     text_layer = extract_text_layer(pdf_path)
+    keyword_text = text_layer.lower()
+    if "patient data" not in keyword_text or "single measurement" not in keyword_text:
+        return row
+
     normalized_header_text = collapse_whitespace(text_layer)
 
     # --- 2. OCR TEXT (cropped region, numbers only) ---
@@ -228,10 +389,9 @@ def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
     debug_txt.write_text(ocr_text, encoding="utf-8")
 
     # --- 4. Build the row ---
-    row: Dict[str, Optional[float]] = {}
     row.update(parse_patient_metadata(normalized_header_text))   # header from TEXT layer
     row.update(parse_measurements_from_seca_ocr(ocr_text))       # numbers from OCR
-    row["Source File"] = pdf_path.name
+    row.update(evaluate_data_quality(row))
 
     return row
 
@@ -277,7 +437,7 @@ def main() -> None:
     rows = []
     for pdf in pdf_files:
         try:
-            rows.append({"Source File": pdf.name, **extract_pdf_data(pdf)})
+            rows.append(extract_pdf_data(pdf))
         except Exception as exc:  # pragma: no cover - user feedback path
             show_message(
                 "Parsing error",
@@ -285,7 +445,7 @@ def main() -> None:
             )
             return
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=OUTPUT_FIELD_ORDER)
     df.to_excel(output_path, index=False)
     show_message(
         "SECA Data Converter",
