@@ -377,6 +377,12 @@ def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
     text_layer = extract_text_layer(pdf_path)
     keyword_text = text_layer.lower()
     if "patient data" not in keyword_text or "single measurement" not in keyword_text:
+        row.update(
+            {
+                "Data Quality": "Fail",
+                "Data Quality Fails": "Not recognized as a SECA data export",
+            }
+        )
         return row
 
     normalized_header_text = collapse_whitespace(text_layer)
