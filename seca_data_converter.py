@@ -31,6 +31,28 @@ import pytesseract
 from tkinter import Tk, messagebox
 from tkinter import filedialog
 
+# --- OCR region configuration ---
+
+# Base page size in pixels that coordinates were measured on
+BASE_PAGE_WIDTH = 652
+BASE_PAGE_HEIGHT = 922
+
+# Region in that base coordinate system (left, top, right, bottom)
+RAW_OCR_BOX = (440, 239, 568, 875)
+
+def get_scaled_ocr_box(image_size):
+    """Scale RAW_OCR_BOX from the 652x922 coordinate system to the actual rendered size."""
+    img_w, img_h = image_size
+    sx = img_w / BASE_PAGE_WIDTH
+    sy = img_h / BASE_PAGE_HEIGHT
+    x0, y0, x1, y1 = RAW_OCR_BOX
+    return (
+        int(x0 * sx),
+        int(y0 * sy),
+        int(x1 * sx),
+        int(y1 * sy),
+    )
+
 # Tell pytesseract where tesseract.exe lives
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -66,35 +88,46 @@ def extract_page_text(page: "pdfplumber.page.Page", include_ocr: bool = True) ->
     if include_ocr:
         ocr_text = ""
         try:
+            # Render full page, then crop to the scaled region
             pil_image = page.to_image(resolution=300).original
-            ocr_text = pytesseract.image_to_string(pil_image)
+            crop_box = get_scaled_ocr_box(pil_image.size)
+            cropped = pil_image.crop(crop_box)
+
+            # DEBUG (optional): save the cropped region once to visually verify
+            # cropped.save("debug_cropped_page.png")
+
+            ocr_text = pytesseract.image_to_string(cropped)
         except Exception:
-            # OCR is best-effort; fall back to whatever text layer we have.
             ocr_text = ""
         if ocr_text.strip():
             parts.append(ocr_text)
 
     return "\n".join(parts)
 
-
 def extract_pdf_text(pdf_path: Path) -> str:
-    """Extract text from PDF using pdfplumber + Tesseract OCR."""
+    """Extract ONLY OCR text from the cropped measurement region."""
     parts: List[str] = []
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            # Text layer (very minimal in SECA)
-            text = page.extract_text() or ""
-            parts.append(text)
-
-            # OCR layer
             try:
                 pil_image = page.to_image(resolution=300).original
-                ocr_text = pytesseract.image_to_string(pil_image)
+                crop_box = get_scaled_ocr_box(pil_image.size)
+                cropped = pil_image.crop(crop_box)
+                ocr_text = pytesseract.image_to_string(cropped)
             except Exception:
                 ocr_text = ""
             parts.append(ocr_text)
 
+    return "\n".join(parts)
+
+def extract_text_layer(pdf_path: Path) -> str:
+    """Extract ONLY the PDF's embedded text layer (no OCR)."""
+    parts: List[str] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            parts.append(text)
     return "\n".join(parts)
 
 def parse_patient_metadata(text: str) -> Dict[str, Optional[str]]:
@@ -130,98 +163,74 @@ def parse_patient_metadata(text: str) -> Dict[str, Optional[str]]:
     return metadata
 
 
-def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float]]:
+def parse_measurements_from_seca_ocr(ocr_text: str) -> Dict[str, Optional[float]]:
     """
-    Parse SECA measurement values from OCR text by assuming a fixed order
-    of numeric values after the '10/7/2025' style date line.
+    Parse SECA measurement values from OCR text based purely on the
+    order of numeric values in the cropped OCR region (no date anchor).
     """
-    # 1. Anchor on the slash-style date that precedes the numeric block
-    date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", full_text)
-    if not date_match:
-        return {}
 
-    start = date_match.start()
+    # Extract all numbers (ints or floats)
+    nums = re.findall(r"\d+(?:\.\d+)?", ocr_text)
+    values = [float(n) for n in nums]
 
-    # 2. Find the FIRST "Page N" that occurs *after* the date
-    page_match = None
-    for m in re.finditer(r"Page\s+\d+", full_text):
-        if m.start() > start:
-            page_match = m
-            break
-
-    if page_match:
-        region = full_text[start:page_match.start()]
-    else:
-        region = full_text[start:]
-
-    # 3. Extract all numbers in that region
-    nums = re.findall(r"\d+(?:\.\d+)?", region)
-    # First three numbers are the date pieces (month, day, year)
-    if len(nums) <= 3:
-        return {}
-
-    values = [float(n) for n in nums[3:]]  # skip the date
-
-    field_defs: List[tuple[str, int]] = [
-        ("Fat Mass (kg)", 1),
-        ("Fat Mass (%)", 1),
-        ("Fat Mass Index (kg/m^2)", 1),
-        ("Fat-Free Mass (kg)", 1),
-        ("Fat-Free Mass (%)", 1),
-        ("Fat-Free Mass Index (kg/m^2)", 1),
-        ("Skeletal Muscle Mass (kg)", 1),
-        ("Right Arm (kg)", 1),
-        ("Left Arm (kg)", 1),
-        ("Right Leg (kg)", 1),
-        ("Left Leg (kg)", 1),
-        ("Torso (kg)", 1),
-        ("Visceral Adipose Tissue", 1),
-        ("Body Mass Index (kg/m^2)", 1),
-        ("Height (m)", 1),
-        ("Weight (kg)", 1),
-        ("Total Body Water (L)", 1),
-        ("Total Body Water (%)", 1),
-        ("Extracellular Water (L)", 1),
-        ("Extracellular Water (%)", 1),
-        ("ECW/TBW (%)", 1),
-        ("Resting Energy Expenditure (kcal/day)", 1),
-        ("Energy Consumption (kcal/day)", 1),
-        ("Phase Angle (deg)", 1),
-        ("Phase Angle Percentile", 1),
-        ("Resistance (Ohm)", 1),
-        ("Reactance (Ohm)", 1),
-        ("Physical Activity Level", 1),
+    # List of fields, in exact order they appear in the cropped OCR block
+    field_defs: List[str] = [
+        "Fat Mass (kg)",
+        "Fat Mass (%)",
+        "Fat Mass Index (kg/m^2)",
+        "Fat-Free Mass (kg)",
+        "Fat-Free Mass (%)",
+        "Fat-Free Mass Index (kg/m^2)",
+        "Skeletal Muscle Mass (kg)",
+        "Right Arm (kg)",
+        "Left Arm (kg)",
+        "Right Leg (kg)",
+        "Left Leg (kg)",
+        "Torso (kg)",
+        "Visceral Adipose Tissue",
+        "Body Mass Index (kg/m^2)",
+        "Height (m)",
+        "Weight (kg)",
+        "Total Body Water (L)",
+        "Total Body Water (%)",
+        "Extracellular Water (L)",
+        "Extracellular Water (%)",
+        "ECW/TBW (%)",
+        "Resting Energy Expenditure (kcal/day)",
+        "Energy Consumption (kcal/day)",
+        "Phase Angle (deg)",
+        "Phase Angle Percentile",
+        "Resistance (Ohm)",
+        "Reactance (Ohm)",
+        "Physical Activity Level",
     ]
 
-    total_needed = sum(count for _, count in field_defs)
-    measurements: Dict[str, Optional[float]] = {
-        name: None for name, _ in field_defs
-    }
+    measurements = {name: None for name in field_defs}
 
-    if len(values) < total_needed:
-        # Not enough numbers; keep None for missing entries
-        return measurements
-
-    idx = 0
-    for name, count in field_defs:
-        # All counts are 1 in this layout
-        measurements[name] = values[idx]
-        idx += count
+    # Fill what we can
+    for i, name in enumerate(field_defs):
+        if i < len(values):
+            measurements[name] = values[i]
 
     return measurements
 
 def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
-    full_text = extract_pdf_text(pdf_path)
 
-    # DEBUG: write OCR text to a .txt next to the PDF
+    # --- 1. HEADER TEXT (for Patient ID, Sex, Age, Date, Time) ---
+    text_layer = extract_text_layer(pdf_path)
+    normalized_header_text = collapse_whitespace(text_layer)
+
+    # --- 2. OCR TEXT (cropped region, numbers only) ---
+    ocr_text = extract_pdf_text(pdf_path)
+
+    # --- 3. DEBUG OUTPUT (optional) ---
     debug_txt = pdf_path.with_suffix(".ocr.txt")
-    debug_txt.write_text(full_text, encoding="utf-8")
+    debug_txt.write_text(ocr_text, encoding="utf-8")
 
-    normalized_text = collapse_whitespace(full_text)
+    # --- 4. Build the row ---
     row: Dict[str, Optional[float]] = {}
-
-    row.update(parse_patient_metadata(normalized_text))
-    row.update(parse_measurements_from_seca_ocr(full_text))
+    row.update(parse_patient_metadata(normalized_header_text))   # header from TEXT layer
+    row.update(parse_measurements_from_seca_ocr(ocr_text))       # numbers from OCR
     row["Source File"] = pdf_path.name
 
     return row
