@@ -135,21 +135,26 @@ def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float
     Parse SECA measurement values from OCR text by assuming a fixed order
     of numeric values after the '10/7/2025' style date line.
     """
-    # Find the first date like 10/7/2025 or 7/10/2025
+    # 1. Anchor on the slash-style date that precedes the numeric block
     date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", full_text)
     if not date_match:
         return {}
 
     start = date_match.start()
 
-    # Try to cut off before the footer "Page 1"
-    page_match = re.search(r"Page\s+\d+", full_text)
+    # 2. Find the FIRST "Page N" that occurs *after* the date
+    page_match = None
+    for m in re.finditer(r"Page\s+\d+", full_text):
+        if m.start() > start:
+            page_match = m
+            break
+
     if page_match:
         region = full_text[start:page_match.start()]
     else:
         region = full_text[start:]
 
-    # Extract all numbers in that region
+    # 3. Extract all numbers in that region
     nums = re.findall(r"\d+(?:\.\d+)?", region)
     # First three numbers are the date pieces (month, day, year)
     if len(nums) <= 3:
@@ -194,7 +199,7 @@ def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float
     }
 
     if len(values) < total_needed:
-        # Not enough numbers; bail out gracefully
+        # Not enough numbers; keep None for missing entries
         return measurements
 
     idx = 0
@@ -208,18 +213,15 @@ def parse_measurements_from_seca_ocr(full_text: str) -> Dict[str, Optional[float
 def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
     full_text = extract_pdf_text(pdf_path)
 
-    # For metadata, we only need a whitespace-collapsed version
-    normalized_text = collapse_whitespace(full_text)
+    # DEBUG: write OCR text to a .txt next to the PDF
+    debug_txt = pdf_path.with_suffix(".ocr.txt")
+    debug_txt.write_text(full_text, encoding="utf-8")
 
+    normalized_text = collapse_whitespace(full_text)
     row: Dict[str, Optional[float]] = {}
 
-    # Patient metadata (ID, Sex, Age, Date, Time)
     row.update(parse_patient_metadata(normalized_text))
-
-    # SECA measurement values from OCR
     row.update(parse_measurements_from_seca_ocr(full_text))
-
-    # Always include source file name so you can trace back
     row["Source File"] = pdf_path.name
 
     return row
