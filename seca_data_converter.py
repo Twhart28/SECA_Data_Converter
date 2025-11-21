@@ -304,7 +304,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         fmi = values["Fat Mass Index (kg/m^2)"]
         ffmi = values["Fat-Free Mass Index (kg/m^2)"]
         bmi = values["SECA BMI (kg/m^2)"]
-        if not almost_equal((fmi or 0) + (ffmi or 0), bmi or 0, 0.2):
+        if not almost_equal((fmi or 0) + (ffmi or 0), bmi or 0, 0.02):
             failures.append("3")
     else:
         failures.append("3")
@@ -327,7 +327,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
                 "Torso (kg)",
             ]
         )
-        if not almost_equal(sum_limbs, values["Skeletal Muscle Mass (kg)"] or 0, 0.3):
+        if not almost_equal(sum_limbs, values["Skeletal Muscle Mass (kg)"] or 0, 0.03):
             failures.append("4")
     else:
         failures.append("4")
@@ -338,7 +338,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         bmi = values["SECA BMI (kg/m^2)"]
         if height in (0, None):
             failures.append("5")
-        elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.4):
+        elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.04):
             failures.append("5")
     else:
         failures.append("5")
@@ -353,7 +353,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         ratio = values["ECW/TBW (%)"]
         if tbw in (0, None):
             failures.append("6")
-        elif not almost_equal(((ecw or 0) / (tbw or 1)) * 100, ratio or 0, 0.2):
+        elif not almost_equal(((ecw or 0) / (tbw or 1)) * 100, ratio or 0, 0.02):
             failures.append("6")
     else:
         failures.append("6")
@@ -368,7 +368,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         ratio = values["ECW/TBW (%)"]
         if tbw_pct in (0, None):
             failures.append("7")
-        elif not almost_equal(((ecw_pct or 0) / (tbw_pct or 1)) * 100, ratio or 0, 0.2):
+        elif not almost_equal(((ecw_pct or 0) / (tbw_pct or 1)) * 100, ratio or 0, 0.02):
             failures.append("7")
     else:
         failures.append("7")
