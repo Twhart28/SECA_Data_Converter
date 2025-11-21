@@ -88,7 +88,7 @@ MEASUREMENT_FIELD_NAMES: List[str] = [
     "Left Leg (kg)",
     "Torso (kg)",
     "Visceral Adipose Tissue",
-    "Body Mass Index (kg/m^2)",
+    "SECA BMI (kg/m^2)",
     "Height (m)",
     "Weight (kg)",
     "Total Body Water (L)",
@@ -105,13 +105,27 @@ MEASUREMENT_FIELD_NAMES: List[str] = [
     "Physical Activity Level",
 ]
 
-OUTPUT_FIELD_ORDER = [
-    "Source File",
-    *PATIENT_METADATA_FIELDS,
-    "Data Quality",
-    "Data Quality Fails",
-    *MEASUREMENT_FIELD_NAMES,
+CALCULATED_FIELD_NAMES: List[str] = [
+    "Body Mass Index (kg/m^2)",
 ]
+
+
+def output_field_order() -> List[str]:
+    order: List[str] = []
+    for name in MEASUREMENT_FIELD_NAMES:
+        order.append(name)
+        if name == "SECA BMI (kg/m^2)":
+            order.extend(CALCULATED_FIELD_NAMES)
+    return [
+        "Source File",
+        *PATIENT_METADATA_FIELDS,
+        "Data Quality",
+        "Data Quality Fails",
+        *order,
+    ]
+
+
+OUTPUT_FIELD_ORDER = output_field_order()
 
 def normalize_number(token: str) -> float:
     token = token.replace(",", ".")
@@ -258,11 +272,11 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
     if numbers_present([
         "Fat Mass Index (kg/m^2)",
         "Fat-Free Mass Index (kg/m^2)",
-        "Body Mass Index (kg/m^2)",
+        "SECA BMI (kg/m^2)",
     ]):
         fmi = values["Fat Mass Index (kg/m^2)"]
         ffmi = values["Fat-Free Mass Index (kg/m^2)"]
-        bmi = values["Body Mass Index (kg/m^2)"]
+        bmi = values["SECA BMI (kg/m^2)"]
         if not almost_equal((fmi or 0) + (ffmi or 0), bmi or 0, 0.2):
             failures.append("3")
     else:
@@ -291,10 +305,10 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
     else:
         failures.append("4")
 
-    if numbers_present(["Weight (kg)", "Height (m)", "Body Mass Index (kg/m^2)"]):
+    if numbers_present(["Weight (kg)", "Height (m)", "SECA BMI (kg/m^2)"]):
         weight = values["Weight (kg)"]
         height = values["Height (m)"]
-        bmi = values["Body Mass Index (kg/m^2)"]
+        bmi = values["SECA BMI (kg/m^2)"]
         if height in (0, None):
             failures.append("5")
         elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.4):
@@ -397,6 +411,14 @@ def extract_pdf_data(pdf_path: Path) -> Dict[str, Optional[float]]:
     # --- 4. Build the row ---
     row.update(parse_patient_metadata(normalized_header_text))   # header from TEXT layer
     row.update(parse_measurements_from_seca_ocr(ocr_text))       # numbers from OCR
+
+    weight = row.get("Weight (kg)")
+    height = row.get("Height (m)")
+    if height not in (None, 0):
+        row["Body Mass Index (kg/m^2)"] = (
+            (weight or 0) / ((height or 1) ** 2)
+        ) if weight is not None else None
+
     row.update(evaluate_data_quality(row))
 
     return row
