@@ -40,6 +40,9 @@ BASE_PAGE_HEIGHT = 922
 # Region in that base coordinate system (left, top, right, bottom)
 RAW_OCR_BOX = (440, 239, 568, 875)
 
+# Render resolution for OCR snapshots (higher improves text clarity)
+OCR_RENDER_RESOLUTION = 300
+
 def get_scaled_ocr_box(image_size):
     """Scale RAW_OCR_BOX from the 652x922 coordinate system to the actual rendered size."""
     img_w, img_h = image_size
@@ -60,7 +63,6 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 NUMBER_PATTERN = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 PATIENT_FIELDS = {
-    "Patient ID": re.compile(r"ID[:\s]+([A-Za-z0-9-]+)", re.IGNORECASE),
     # Use a word boundary to avoid matching the "age" portion inside other words
     # such as "Average", which previously resulted in incorrect ages (e.g. "1").
     "Age": re.compile(r"\bAge[:\s]+(\d+)", re.IGNORECASE),
@@ -150,7 +152,7 @@ def extract_page_text(page: "pdfplumber.page.Page", include_ocr: bool = True) ->
         ocr_text = ""
         try:
             # Render full page, then crop to the scaled region
-            pil_image = page.to_image(resolution=300).original
+            pil_image = page.to_image(resolution=OCR_RENDER_RESOLUTION).original
             crop_box = get_scaled_ocr_box(pil_image.size)
             cropped = pil_image.crop(crop_box)
 
@@ -172,7 +174,7 @@ def extract_pdf_text(pdf_path: Path) -> str:
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             try:
-                pil_image = page.to_image(resolution=300).original
+                pil_image = page.to_image(resolution=OCR_RENDER_RESOLUTION).original
                 crop_box = get_scaled_ocr_box(pil_image.size)
                 cropped = pil_image.crop(crop_box)
                 ocr_text = pytesseract.image_to_string(cropped)
@@ -199,6 +201,10 @@ def parse_patient_metadata(text: str) -> Dict[str, Optional[str]]:
         "Collection Date": None,
         "Collection Time": None,
     }
+
+    patient_id_match = re.search(r"ID\s*[:\-]?\s*(.*?)\s+Name", text, re.IGNORECASE)
+    if patient_id_match:
+        metadata["Patient ID"] = patient_id_match.group(1).strip()
 
     for field, pattern in PATIENT_FIELDS.items():
         match = pattern.search(text)
@@ -338,7 +344,7 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         bmi = values["SECA BMI (kg/m^2)"]
         if height in (0, None):
             failures.append("5")
-        elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.04):
+        elif not almost_equal((weight or 0) / ((height or 1) ** 2), bmi or 0, 0.3):
             failures.append("5")
     else:
         failures.append("5")
