@@ -250,6 +250,33 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
     def almost_equal(calculated: float, expected: float, tolerance: float) -> bool:
         return abs(calculated - expected) <= tolerance
 
+    def add_decimal_between_first_two_digits(value: Optional[float]) -> Optional[float]:
+        """
+        Insert a decimal point after the first digit of an integer-like value.
+
+        Examples:
+            41   -> 4.1
+            410  -> 4.10 -> 4.1
+
+        Only integer-like inputs with at least two digits are adjusted; other
+        values return ``None`` to signal no change.
+        """
+
+        if value is None:
+            return None
+
+        if not math.isclose(value, round(value), abs_tol=1e-6):
+            return None
+
+        sign = -1 if value < 0 else 1
+        integer_part = str(int(abs(round(value))))
+
+        if len(integer_part) < 2:
+            return None
+
+        decimal_value = float(f"{integer_part[0]}.{integer_part[1:]}")
+        return sign * decimal_value
+
     failures: List[str] = []
 
     if numbers_present(["Fat Mass (kg)", "Fat-Free Mass (kg)", "Weight (kg)"]):
@@ -363,12 +390,21 @@ def evaluate_data_quality(values: Dict[str, Optional[float]]) -> Dict[str, Optio
         reactance = values["Reactance (Ohm)"]
         resistance = values["Resistance (Ohm)"]
         phase_angle = values["Phase Angle (deg)"]
+        original_phase_angle = phase_angle
         if resistance in (0, None):
             failures.append("9")
         else:
             calculated = math.atan((reactance or 0) / (resistance or 1)) * 180 / math.pi
             if not almost_equal(calculated, phase_angle or 0, 0.1):
-                failures.append("9")
+                adjusted_phase_angle = add_decimal_between_first_two_digits(phase_angle)
+
+                if adjusted_phase_angle is not None and almost_equal(
+                    calculated, adjusted_phase_angle, 0.1
+                ):
+                    values["Phase Angle (deg)"] = adjusted_phase_angle
+                else:
+                    values["Phase Angle (deg)"] = original_phase_angle
+                    failures.append("9")
     else:
         failures.append("9")
 
